@@ -202,6 +202,31 @@ lytcentral → hosts(127.0.0.1) / iptables(95.163.244.135)
 - Нет `curl/find/head/tail/which` — только busybox по полному пути
   `/data/busybox`.
 
+### Грабли Фазы A (HA-сборка, собраны в v3.2)
+- **rootfs rcn-ee БЕЗ pip/ensurepip** и с урезанным distutils (только
+  `__init__.py`+`version.py`) -> pip ставить get-pip'ом, distutils —
+  `deb-extract`. "Жирного" rootfs с pip под armhf практически не бывает.
+- **`apt install` / `apt --fix-broken` мертвы** (dpkg-deb сегфолт). После
+  ручной распаковки .deb НЕ звать `apt --fix-broken` — застрянет на
+  security-апдейте python3.9. Сразу `apt-mark hold` python3.9-пакетов.
+  Качать named-пакеты `apt-get download` (не строит resolver, переживает
+  version-перекос), распаковывать `deb-extract`.
+- **pillow**: `pip install --index-url piwheels --only-binary :all: pillow`
+  (без пина — 9.3.0 колеса нет). Компиляция падает на zlib.
+- **HA `--skip-pip` обязателен**, но зависимости тогда добирать вручную и
+  пинить под 2023.1 (см. §9). pip при ручной доустановке всегда тянет latest.
+- **Windows-консоль + heredoc**: любой python-скрипт через `python3 <<EOF`
+  из Windows держать в ASCII (кириллица -> `Non-UTF-8 ... \x8f`). Сообщения
+  скриптов — по-английски. `chcp` в Android-шелле нет.
+- **`.tmp` при заливке**: Total Commander ADB-плагин пишет во временный файл
+  и переименовывает; ждать финального имени. Нет pipe в `adb shell` (нужен
+  обычный adb.exe для потоковой распаковки).
+- **udev/маунты при удалении chroot**: сначала `pkill hass` + `umount -l`
+  (busybox, у toybox нет `-l`), потом `rm`. Проще — reboot (маунты не persist).
+  ПОСЛЕ ребута chroot-маунты уже подняты автозапуском.
+- **start-скрипты**: писать через quoted heredoc (без chr()-кодирования);
+  задавать `PATH` и `HOME=/root` в exec, иначе в chroot пустой PATH.
+
 ---
 
 ## 7. Локальный HTTP API хаба (порт 8080) — прямое управление
@@ -256,17 +281,51 @@ AvailableServers: ServerIP | LastChoosed
 
 ---
 
-## 9. Home Assistant
+## 9. Home Assistant — воспроизводимая сборка Фазы A
 
-- В chroot `/data/debian`, HA **2023.1.7** (pip, ручные зависимости).
-- Порт **8123**. Запуск `/system/bin/start_ha.sh` из `eth0_setup`.
-- Вход в chroot:
-  ```sh
-  /data/busybox chroot /data/debian /bin/bash -c \
-    "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; \
-     export LD_PRELOAD=''; <cmd>"
-  ```
-- apt-песочница отключена: `APT::Sandbox::User "root"`.
+HA **2023.1.7** в chroot `/data/debian/opt/ha` (venv). Порт **8123**.
+Ставится `bootstrap.sh` -> `setup_chroot.sh` (v3.2) одной командой.
+
+### Порядок установки (setup_chroot.sh)
+1. pip — через **get-pip.py** (`bootstrap.pypa.io/pip/3.9/`), качать питоновым
+   `urllib` (curl в rootfs нет). Минимальный rootfs идёт БЕЗ pip и ensurepip.
+2. venv: `python3 -m venv /opt/ha --without-pip`, затем get-pip в venv
+   (ensurepip сломан -> `--without-pip` обязателен).
+3. distutils/setuptools/pkg_resources — через `deb-extract` в системный питон
+   И `setuptools==67.8.0` отдельно в venv (даёт pkg_resources в venv).
+4. **pillow — из piwheels ДО HA**: `--only-binary :all:` (9.3.0 колеса нет,
+   ставится 11.x). Иначе HA компилирует pillow и падает на отсутствии zlib.
+5. HA: `pip install homeassistant==2023.1.7`.
+
+### Ключ: HA запускать с `--skip-pip`
+Без флага HA при старте пытается доустановить пины (`pillow==9.3.0`) и падает.
+Но `--skip-pip` тогда НЕ добирает честные зависимости -> их ставим вручную,
+ВСЕ пинить под эпоху 2023.1 (latest ломает старый HA):
+```
+aiohttp==3.8.1  yarl==1.8.1          # re-pin ПОСЛЕДНИМ (другие install их задирают)
+aiohttp_cors==0.7.0                  # 0.8+ требует aiohttp>=3.9 (web.AppKey)
+sqlalchemy==1.4.44                   # 2.0 ломает recorder (Mapped[] annotations)
+janus  fnvhash                       # тихие зависимости file_upload/analytics
+home-assistant-frontend==20230110.0  # сам UI (имя пакета, НЕ hass-frontend)
+```
++ системная `.so`: `deb-extract libopenjp2-7` (нужна pillow/image_upload).
+Точную версию frontend брать из `frontend/manifest.json` -> `requirements`.
+
+### Onboarding
+В `configuration.yaml` сразу задать `country: RU`, `currency: RUB`,
+`language: ru` — иначе onboarding падает `Failed to save: undefined`
+(`invalid ISO 3166 country ... Got ''`).
+
+### Вход в chroot
+`sh /data/start_debian.sh` — ВАЖНО: скрипт задаёт `PATH` и `HOME=/root` в
+`os.environ` перед exec bash (иначе python3/nano "не найдены" — PATH пустой,
+а `~/.bashrc` не читается без HOME). Helper `ha-restart` (в chroot) — убить
+залипший hass + старт.
+
+### Автозапуск
+`eth0_setup` -> `start_ha.sh &` (в фоне). Хук дописывать через **/data**,
+НЕ /tmp (в Android-шелле /tmp нет — из-за этого хук молча не добавлялся).
+apt-песочница отключена: `APT::Sandbox::User "root"`.
 
 ---
 

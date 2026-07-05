@@ -60,6 +60,7 @@ rootfs больше). Качать `wget`'ом с устройства или `a
 tar -xJf debian-11.7-minimal-armhf-2023-08-22.tar.xz
 cp debian-11.7-minimal-armhf-2023-08-22/armhf-rootfs-debian-bullseye.tar \
    blobs/
+распаковываем из https://rcn-ee.com/rootfs/eewiki/minfs/debian-11.7-minimal-armhf-2023-08-22.tar.xz
 
 # busybox armv7l
 wget -O blobs/busybox-armv7l \
@@ -113,15 +114,26 @@ adb shell /data/busybox chmod 755 /data/*.sh /data/cloud/*.sh /data/cloud/*.py
 adb shell sh /data/bootstrap.sh
 ```
 
-Делает: SELinux permissive → распаковка rootfs → монтирование ФС →
-`setup_chroot.sh` (сеть, apt, pip, distutils, setuptools 67.8.0, venv,
-HA 2023.1.7, конфиги) → `/data/start_debian.sh` → `start_ha.sh` в
-`/system/bin` → хук в `eth0_setup`.
+Делает (v3.2, воспроизводимо одной командой):
+SELinux permissive → распаковка rootfs (`rootfs.tar` удаляется после,
+экономит ~731 МБ) → монтирование ФС → `setup_chroot.sh`:
+сеть, apt + `apt-mark hold` python3.9, `deb-extract`, pip через **get-pip**
+(rootfs без pip/ensurepip), venv `/opt/ha`, pillow из **piwheels**, HA
+2023.1.7, **HA-зависимости с пинами под 2023.1** (aiohttp 3.8.1, yarl 1.8.1,
+aiohttp_cors 0.7.0, sqlalchemy 1.4.44, janus, fnvhash,
+home-assistant-frontend 20230110.0, `.so` libopenjp2-7), конфиг с
+`country: RU`, чистые `start_debian.sh`/`start_ha.sh` → хук в `eth0_setup`.
+
+HA запускается с **`--skip-pip`** (иначе пытается ставить пины и падает).
+Скрипт fail-loud: при провале критичного шага останавливается с `FATAL:`.
 
 ```bash
 adb shell sh /data/verify.sh          # проверка Фазы A
-# Открыть: http://192.168.2.223:8123
+# Открыть: http://192.168.2.223:8123  → onboarding
 ```
+
+**Первый вход в chroot вручную:** `sh /data/start_debian.sh` (задаёт PATH и
+HOME). Ручной перезапуск HA изнутри: `ha-restart`.
 
 ### Шаг 3 — Первый запуск lytcentral (создаёт БД)
 
