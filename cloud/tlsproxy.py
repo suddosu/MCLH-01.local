@@ -1,14 +1,14 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
-# ALYT cloud emulator — TLS terminator
-# Крутится ВНУТРИ chroot, слушает 0.0.0.0:443, терминирует TLS нашим
-# сертификатом и форвардит расшифрованный HTTP на 127.0.0.1:6666.
+# ALYT cloud emulator - TLS terminator
+# Runs INSIDE chroot, listens 0.0.0.0:443, terminates TLS with our
+# cert and forwards decrypted HTTP to 127.0.0.1:6666.
 #
-# Старый Android SSL-стек (it.takeoff.lytcentral) умеет только TLS 1.0
-# и слабые шифры, поэтому нужен OPENSSL_CONF=openssl_legacy.cnf и
-# SECLEVEL=0 — иначе handshake падает с 'unsupported protocol'.
+# Old Android SSL stack (it.takeoff.lytcentral) only speaks TLS 1.0
+# and weak ciphers, so OPENSSL_CONF=openssl_legacy.cnf and
+# SECLEVEL=0 are required, else handshake fails 'unsupported protocol'.
 #
-# Запуск (из bootstrap, внутри chroot):
+# Start (from bootstrap, inside chroot):
 #   OPENSSL_CONF=/opt/cloud/openssl_legacy.cnf \
 #     nohup python3 /opt/cloud/tlsproxy.py > /opt/cloud/tls.log 2>&1 &
 
@@ -19,7 +19,7 @@ import threading
 LISTEN_PORT = 443
 BACKEND_HOST = "127.0.0.1"
 BACKEND_PORT = 6666
-CERT_PEM = "/opt/cloud/server.pem"   # cert + key в одном файле
+CERT_PEM = "/opt/cloud/server.pem"   # cert + key in one file
 
 
 def handle(conn):
@@ -49,16 +49,16 @@ def handle(conn):
 def build_context():
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(CERT_PEM)
-    # Разрешаем слабые шифры (нужно старому Android)
+    # Allow weak ciphers (needed by old Android)
     ctx.set_ciphers("ALL:@SECLEVEL=0")
-    # Снимаем запреты на старые протоколы
+    # Lift bans on old protocols
     ctx.options &= ~ssl.OP_NO_TLSv1
     ctx.options &= ~ssl.OP_NO_TLSv1_1
     try:
         ctx.minimum_version = ssl.TLSVersion.TLSv1
     except (ValueError, AttributeError):
-        # Старые сборки OpenSSL могут не поддерживать явное задание —
-        # тогда минимум задаётся через openssl_legacy.cnf
+        # Old OpenSSL builds may not support explicit setting -
+        # then the minimum comes from openssl_legacy.cnf
         pass
     return ctx
 
@@ -77,7 +77,7 @@ def main():
             tls = ctx.wrap_socket(conn, server_side=True)
             threading.Thread(target=handle, args=(tls,), daemon=True).start()
         except Exception:
-            # Битый handshake — просто игнорируем, не роняем сервер
+            # Broken handshake - ignore, do not crash the server
             try:
                 conn.close()
             except Exception:

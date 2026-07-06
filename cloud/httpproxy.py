@@ -1,15 +1,15 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
-# ALYT cloud emulator — HTTP backend
-# Крутится ВНУТРИ chroot, слушает 0.0.0.0:6666, отдаёт JSON-ответы,
-# которые ожидает it.takeoff.lytcentral от hub2.lifecontrol.ru.
+# ALYT cloud emulator - HTTP backend
+# Runs INSIDE chroot, listens 0.0.0.0:6666, returns the JSON responses
+# that it.takeoff.lytcentral expects from hub2.lifecontrol.ru.
 #
-# Запуск (из bootstrap, внутри chroot):
+# Start (from bootstrap, inside chroot):
 #   nohup python3 /opt/cloud/httpproxy.py > /opt/cloud/http.log 2>&1 &
 #
-# Порт 6666 выбран потому, что 7777/8888/9999 уходили в TIME_WAIT в ходе
-# отладки. Если 6666 занят («Address already in use») — поменяй PORT здесь
-# и в tlsproxy.py (BACKEND_PORT), и в iptables-редиректе.
+# Port 6666 chosen because 7777/8888/9999 went into TIME_WAIT during
+# debugging. If 6666 is busy ("Address already in use") change PORT here
+# and in tlsproxy.py (BACKEND_PORT) and the iptables redirect.
 
 import socket
 import threading
@@ -18,15 +18,15 @@ import time
 PORT = 6666
 LOG = "/opt/cloud/req_log.txt"
 
-# Имя пользователя из ServerDataTable.UserRemote (см. db/patch_registration.py)
+# Username from ServerDataTable.UserRemote (see patch_registration.py)
 USERNAME = "user_5541@alyt.lk2.lifecontrol.ru"
 
-# Голый хост — тот же, что в AvailableServers (без схемы!)
+# Bare host - same as in AvailableServers (no scheme!)
 SERVER_HOST = "hub2.lifecontrol.ru"
 
 
 def build_body(path):
-    """Возвращает JSON-строку ответа для данного пути запроса."""
+    """Return the JSON response string for the given request path."""
     if "ts_setup" in path:
         return '{"RESULT":"success","TIMESTAMP":%d}' % int(time.time())
     if "Registration_Status" in path:
@@ -41,7 +41,7 @@ def build_body(path):
         return '{"RESULT":"success","CMD_LIST":[]}'
     if "Check_Version_Update" in path:
         return '{"RESULT":"success","UPDATE_AVAILABLE":false}'
-    # Default_Notifications, Report, Event, Update_Name и всё прочее
+    # Default_Notifications, Report, Event, Update_Name and everything else
     return '{"RESULT":"success"}'
 
 
@@ -49,8 +49,8 @@ def handle(conn):
     try:
         conn.settimeout(5)
         data = b""
-        # Читаем до конца заголовков. Тело POST нам не нужно для ответа,
-        # поэтому не ждём Content-Length — это ускоряет и не виснет.
+        # Read until end of headers. POST body not needed for the response,
+        # so we do not wait for Content-Length - faster, no hang.
         while b"\r\n\r\n" not in data:
             try:
                 chunk = conn.recv(1024)
@@ -67,7 +67,7 @@ def handle(conn):
         if len(parts) > 1:
             path = parts[1]
 
-        # Лог запросов — помогает при отладке новых эндпоинтов
+        # Request log - helps when debugging new endpoints
         try:
             with open(LOG, "a") as f:
                 f.write(time.strftime("%H:%M:%S") + " " + path + "\n")

@@ -1,16 +1,15 @@
 #!/bin/bash
-# gen_certs.sh — генерация CA и серверного сертификата для эмулятора облака.
-# Запускается ВНУТРИ chroot (там есть openssl 1.1.1).
+# gen_certs.sh - generate CA + server cert for the cloud emulator.
+# Runs INSIDE chroot (openssl 1.1.1 present).
 #
-# Результат:
-#   /opt/cloud/ca.crt        — CA (публичный), ставится в Android cacerts
-#   /opt/cloud/ca.key        — приватный ключ CA (НЕ коммитить в public repo)
-#   /opt/cloud/server.pem    — cert+key для tlsproxy.py
-#   /opt/cloud/ca_hash.txt   — subject_hash_old, имя файла для Android cacerts
+# Output:
+#   /opt/cloud/ca.crt        - CA (public), installed into Android cacerts
+#   /opt/cloud/ca.key        - CA private key (do NOT commit to public repo)
+#   /opt/cloud/server.pem    - cert+key for tlsproxy.py
+#   /opt/cloud/ca_hash.txt   - subject_hash_old, filename for Android cacerts
 #
-# Идемпотентно: если ca.crt уже есть — переиспользует CA, пересобирает
-# только server.pem (чтобы hash в Android cacerts не менялся между
-# запусками bootstrap).
+# Idempotent: reuses CA if ca.crt exists, only rebuilds server.pem
+# (so the Android cacerts hash stays stable across bootstrap runs).
 
 set -e
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -20,51 +19,38 @@ DIR=/opt/cloud
 mkdir -p "$DIR"
 cd "$DIR"
 
-# SAN — все имена, на которые ходит приложение
 SAN="DNS:hub2.lifecontrol.ru,DNS:lk2.lifecontrol.ru,DNS:lifecontrol.ru"
 
-# --- CA (создаём один раз) ---
+# --- CA (create once) ---
 if [ ! -f "$DIR/ca.crt" ] || [ ! -f "$DIR/ca.key" ]; then
-    echo "gen_certs: создаём CA..."
+    echo "gen_certs: creating CA..."
     openssl genrsa -out "$DIR/ca.key" 2048
-    openssl req -new -x509 -days 3650 \
-        -key "$DIR/ca.key" \
-        -out "$DIR/ca.crt" \
+    openssl req -new -x509 -days 3650 -key "$DIR/ca.key" -out "$DIR/ca.crt" \
         -subj "/CN=LocalCA-ALYT"
 else
-    echo "gen_certs: CA уже существует, переиспользуем"
+    echo "gen_certs: CA exists, reusing"
 fi
 
-# --- Серверный сертификат (подписанный нашим CA) ---
-echo "gen_certs: создаём серверный сертификат..."
+# --- Server cert (signed by our CA) ---
+echo "gen_certs: creating server cert..."
 openssl genrsa -out "$DIR/server.key" 2048
-openssl req -new \
-    -key "$DIR/server.key" \
-    -out "$DIR/server.csr" \
+openssl req -new -key "$DIR/server.key" -out "$DIR/server.csr" \
     -subj "/CN=hub2.lifecontrol.ru"
-
 cat > "$DIR/ext.cnf" <<EOF
 subjectAltName=$SAN
 EOF
+openssl x509 -req -days 3650 -in "$DIR/server.csr" \
+    -CA "$DIR/ca.crt" -CAkey "$DIR/ca.key" -CAcreateserial \
+    -extfile "$DIR/ext.cnf" -out "$DIR/server.crt"
 
-openssl x509 -req -days 3650 \
-    -in "$DIR/server.csr" \
-    -CA "$DIR/ca.crt" \
-    -CAkey "$DIR/ca.key" \
-    -CAcreateserial \
-    -extfile "$DIR/ext.cnf" \
-    -out "$DIR/server.crt"
-
-# tlsproxy.py ждёт cert+key в одном файле
+# tlsproxy.py wants cert+key in one file
 cat "$DIR/server.crt" "$DIR/server.key" > "$DIR/server.pem"
 
-# --- Hash для Android cacerts (имя файла XXXXXXXX.0) ---
+# --- Hash for Android cacerts (filename XXXXXXXX.0) ---
 HASH=$(openssl x509 -in "$DIR/ca.crt" -subject_hash_old -noout)
 echo "$HASH" > "$DIR/ca_hash.txt"
-
-# Android хранилищу нужен PEM с определённым форматом имени
 cp "$DIR/ca.crt" "$DIR/${HASH}.0"
 
-echo "gen_certs: готово."
-echo "  CA hash: $HASH  (файл ${HASH}.0 → /system/etc/security/cacerts/)"
+echo "gen_certs: done."
+echo "  CA hash: $HASH  (file ${HASH}.0 -> /system/etc/security/cacerts/)"
 echo "  server.pem: $DIR/server.pem"
